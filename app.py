@@ -341,6 +341,18 @@ div[data-testid="stCheckbox"] p {
     background-color: #ffffff !important;
     border-radius: 7px !important;
 }
+/* Permanent border on selectbox (visible even when not focused/hovered) */
+[data-testid="stMainBlockContainer"] [data-baseweb="select"] > div:first-child {
+    border: 1.5px solid #b8d0d0 !important;
+    border-radius: 7px !important;
+}
+[data-testid="stMainBlockContainer"] [data-baseweb="select"] > div:first-child:hover {
+    border-color: #0d6e6e !important;
+}
+[data-testid="stMainBlockContainer"] [data-baseweb="select"] > div:first-child:focus-within {
+    border-color: #0d6e6e !important;
+    box-shadow: 0 0 0 2px rgba(13,110,110,0.15) !important;
+}
 [data-testid="stMainBlockContainer"] label {
     color: #4a6e6e !important;
     font-size: 0.80rem !important;
@@ -356,6 +368,67 @@ div[data-testid="stCheckbox"] p {
     color: #2a4444 !important;
     font-weight: 500 !important;
     font-size: 0.90rem !important;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────
+   TREATMENT SELECTION CARDS (Module 2)
+   st.radio with hidden circles — each label IS the card.
+───────────────────────────────────────────────────────────────────────── */
+
+/* Outer radio group: horizontal flex, full width */
+[data-testid="stRadio"] > div[role="radiogroup"] {
+    display: flex !important;
+    flex-direction: row !important;
+    gap: 12px !important;
+    width: 100% !important;
+}
+
+/* Each radio option wrapper: flex-1 so cards share space equally */
+[data-testid="stRadio"] > div[role="radiogroup"] > label {
+    flex: 1 !important;
+    display: flex !important;
+    align-items: center !important;
+    background: #f5f7f7 !important;
+    border: 1.5px solid #ccdede !important;
+    border-left: 5px solid #b0c8c8 !important;
+    border-radius: 8px !important;
+    padding: 10px 18px !important;
+    cursor: pointer !important;
+    transition: border-color 0.15s ease, background 0.15s ease,
+                box-shadow 0.15s ease !important;
+    white-space: pre-line !important;
+    min-height: 0 !important;
+}
+[data-testid="stRadio"] > div[role="radiogroup"] > label:hover {
+    border-color: #0d6e6e !important;
+    border-left-color: #0d6e6e !important;
+    background: #eef4f4 !important;
+}
+/* Selected card — teal */
+[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) {
+    background: #e8f5f0 !important;
+    border-color: #0d6e6e !important;
+    border-left-color: #0d6e6e !important;
+    box-shadow: 0 2px 10px rgba(13,110,110,0.14) !important;
+}
+
+/* Hide the radio circle — the card itself communicates selection */
+[data-testid="stRadio"] > div[role="radiogroup"] > label > div:first-child {
+    display: none !important;
+}
+
+/* Label text */
+[data-testid="stRadio"] > div[role="radiogroup"] > label > div:last-child p {
+    white-space: pre-line !important;
+    color: #4a6060 !important;
+    font-size: 0.93rem !important;
+    font-weight: 500 !important;
+    line-height: 1.6 !important;
+    margin: 0 !important;
+}
+[data-testid="stRadio"] > div[role="radiogroup"] > label:has(input:checked) > div:last-child p {
+    color: #0b2e2e !important;
+    font-weight: 600 !important;
 }
 
 /* ─────────────────────────────────────────────────────────────────────────
@@ -738,17 +811,13 @@ with tab2:
     )
 
     # --- Controls row ---
-    ctrl1, ctrl2, ctrl3 = st.columns([5, 5, 4], gap="medium")
+    ctrl1, ctrl3 = st.columns([7, 4], gap="medium")
     with ctrl1:
         selected_diagnosis = st.selectbox(
             "Diagnosis",
             options=DIAGNOSES,
             index=DIAGNOSES.index(st.session_state.top_diagnosis),
             help="Pre-filled from the top result in Module 1.",
-        )
-    with ctrl2:
-        selected_treatment = st.selectbox(
-            "Treatment", options=TREATMENTS[selected_diagnosis]
         )
     with ctrl3:
         use_age_filter = st.toggle(
@@ -767,6 +836,43 @@ with tab2:
     #   district     — patient_district_num (None = All Districts)
     age_filter    = patient_age_group if use_age_filter else None
     malnut_filter = True if patient_malnourished else None
+
+    # --- Compute posterior mean for each treatment option ---
+    # Done before rendering cards so we know which is recommended.
+    all_treatments = TREATMENTS[selected_diagnosis]
+    treat_means = {}
+    for t in all_treatments:
+        a_t, b_t, _ = bb_model.get_posterior_params(
+            df, selected_diagnosis, t,
+            age_group=age_filter,
+            malnourished=malnut_filter,
+            district=patient_district_num,
+        )
+        treat_means[t] = bb_model.posterior_mean(a_t, b_t)
+
+    best_treatment = max(treat_means, key=treat_means.get)
+
+    # Per-diagnosis session state key — resets to recommended when diagnosis changes
+    treat_key = f"sel_treat_{selected_diagnosis}"
+    if treat_key not in st.session_state:
+        st.session_state[treat_key] = best_treatment
+
+    # --- Clickable treatment cards (radio — single click, no double-click issue) ---
+    def treat_label(t):
+        badge = "★  RECOMMENDED\n" if t == best_treatment else "\n"
+        return f"{badge}{t}\n{treat_means[t]:.1%}  est. success"
+
+    cur_idx = all_treatments.index(st.session_state[treat_key])
+    selected_treatment = st.radio(
+        "Select Treatment",
+        options=all_treatments,
+        format_func=treat_label,
+        horizontal=True,
+        index=cur_idx,
+        label_visibility="collapsed",
+        key=f"treat_radio_{selected_diagnosis}",
+    )
+    st.session_state[treat_key] = selected_treatment
 
     # --- Compute posteriors at each filter level for the funnel display ---
     # Unfiltered baseline
