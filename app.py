@@ -557,11 +557,15 @@ with tab1:
             "(fatigue, pale complexion, weight loss elevated +15%)"
         )
 
+    # Use st.empty() so this slot always exists in the element tree — prevents
+    # the elements below it from shifting when the banner appears/disappears,
+    # which was causing the "Naive Bayes Posterior" header to render twice.
+    banner_slot = st.empty()
     if modifier_parts:
         items_html = "".join(
             f"<li style='margin-bottom:3px'>{p}</li>" for p in modifier_parts
         )
-        st.markdown(
+        banner_slot.markdown(
             "<div style='background:#fffbf0;border:1px solid #e8c870;"
             "border-left:4px solid #e8a838;border-radius:8px;"
             "padding:11px 18px;margin-bottom:14px;font-size:0.85rem;color:#5a3e00'>"
@@ -734,7 +738,7 @@ with tab2:
     )
 
     # --- Controls row ---
-    ctrl1, ctrl2 = st.columns(2, gap="medium")
+    ctrl1, ctrl2, ctrl3 = st.columns([5, 5, 4], gap="medium")
     with ctrl1:
         selected_diagnosis = st.selectbox(
             "Diagnosis",
@@ -746,11 +750,22 @@ with tab2:
         selected_treatment = st.selectbox(
             "Treatment", options=TREATMENTS[selected_diagnosis]
         )
+    with ctrl3:
+        use_age_filter = st.toggle(
+            "Filter by age group",
+            value=True,
+            help=(
+                f"When on, cohort is restricted to {age_group_label}. "
+                "Turning off widens the cohort. Age prior adjustments in "
+                "Module 1 are unaffected by this toggle."
+            ),
+        )
 
-    # All three sidebar filters are always applied:
-    #   age_group  — from the Age slider
-    #   malnourished — from the Malnourished checkbox
-    #   district   — from the District dropdown (None = All Districts)
+    # Cohort filters to apply in Module 2:
+    #   age_filter   — patient_age_group when toggle is on, else None
+    #   malnut_filter — True when malnourished checkbox is checked, else None
+    #   district     — patient_district_num (None = All Districts)
+    age_filter    = patient_age_group if use_age_filter else None
     malnut_filter = True if patient_malnourished else None
 
     # --- Compute posteriors at each filter level for the funnel display ---
@@ -758,21 +773,24 @@ with tab2:
     alpha_all, beta_all, n_all = bb_model.get_posterior_params(
         df, selected_diagnosis, selected_treatment,
     )
-    # After age filter
-    _, _, n_age = bb_model.get_posterior_params(
-        df, selected_diagnosis, selected_treatment,
-        age_group=patient_age_group,
-    )
+    # After age filter (only if toggle is on)
+    if use_age_filter:
+        _, _, n_age = bb_model.get_posterior_params(
+            df, selected_diagnosis, selected_treatment,
+            age_group=age_filter,
+        )
+    else:
+        n_age = n_all
     # After age + malnutrition
     _, _, n_age_malnut = bb_model.get_posterior_params(
         df, selected_diagnosis, selected_treatment,
-        age_group=patient_age_group,
+        age_group=age_filter,
         malnourished=malnut_filter,
     )
     # Final: age + malnutrition + district (primary curve)
     alpha, beta_param, n_cohort = bb_model.get_posterior_params(
         df, selected_diagnosis, selected_treatment,
-        age_group=patient_age_group,
+        age_group=age_filter,
         malnourished=malnut_filter,
         district=patient_district_num,
     )
@@ -796,7 +814,7 @@ with tab2:
         fig = bb_model.plot_posterior(
             alpha, beta_param, n_cohort,
             selected_diagnosis, selected_treatment,
-            age_group=age_group_label,
+            age_group=age_group_label if use_age_filter else None,
             malnourished=malnut_filter,
             comparison_params=(alpha_all, beta_all, n_all),
             comparison_label=f"All patients (n={n_all})",
@@ -851,31 +869,29 @@ with tab2:
         shift    = mean_estimate - mean_all
         arrow    = "↓" if shift < 0 else "↑"
 
-        def funnel_row(label, n, n_prev, is_last=False):
-            pct  = f"{n/n_prev:.0%} of previous" if n_prev != n_all else ""
-            bold = "font-weight:700;" if is_last else ""
-            return (
-                f"<tr>"
-                f"<td style='padding:3px 8px 3px 0;color:#7a5200;{bold}'>{label}</td>"
-                f"<td style='padding:3px 8px;text-align:right;color:#0b2e2e;{bold}font-family:monospace'>{n:,}</td>"
-                f"<td style='padding:3px 0;color:#9a8060;font-size:0.78rem'>{pct}</td>"
-                f"</tr>"
-            )
-
-        rows = funnel_row("All patients", n_all, n_all)
-        rows += funnel_row(f"After age filter ({age_group_label})", n_age, n_all)
+        # Build funnel as a plain list of (label, n, n_prev) tuples — no string manipulation
+        funnel_entries = [("All patients", n_all, None)]
+        if use_age_filter:
+            funnel_entries.append((f"Age: {age_group_label}", n_age, n_all))
         if malnut_filter is not None:
-            rows += funnel_row("After malnutrition filter", n_age_malnut, n_age)
+            prev_n = n_age if use_age_filter else n_all
+            funnel_entries.append(("Malnourished filter", n_age_malnut, prev_n))
         if patient_district_num is not None:
-            rows += funnel_row(f"After {patient_district} filter", n_cohort,
-                               n_age_malnut if malnut_filter else n_age, is_last=True)
-        else:
-            # Re-mark last row as bold
-            rows = rows.replace(
-                funnel_row(f"After age filter ({age_group_label})", n_age, n_all),
-                funnel_row(f"After age filter ({age_group_label})", n_age, n_all, is_last=True)
-                if malnut_filter is None else
-                funnel_row(f"After age filter ({age_group_label})", n_age, n_all),
+            prev_n = n_age_malnut if malnut_filter is not None else (n_age if use_age_filter else n_all)
+            funnel_entries.append((patient_district, n_cohort, prev_n))
+
+        rows_html = ""
+        for i, (label, n, n_prev) in enumerate(funnel_entries):
+            is_last = (i == len(funnel_entries) - 1)
+            pct  = f"{n/n_prev:.0%} of prev" if n_prev is not None else ""
+            bold = "font-weight:700;" if is_last else "font-weight:400;"
+            rows_html += (
+                f"<div style='display:flex;align-items:baseline;gap:8px;"
+                f"padding:3px 0;{bold}'>"
+                f"  <span style='flex:1;color:#7a5200'>{label}</span>"
+                f"  <span style='color:#0b2e2e;font-family:monospace'>{n:,}</span>"
+                f"  <span style='color:#9a8060;font-size:0.76rem;min-width:72px'>{pct}</span>"
+                f"</div>"
             )
 
         st.markdown(
@@ -885,7 +901,7 @@ with tab2:
             f"  <div style='font-size:0.68rem;font-weight:700;color:#9a7040;"
             f"letter-spacing:0.10em;text-transform:uppercase;margin-bottom:8px'>"
             f"Cohort Filters — Sample Funnel</div>"
-            f"  <table style='border-collapse:collapse;width:100%'>{rows}</table>"
+            f"  {rows_html}"
             f"  <div style='margin-top:8px;padding-top:8px;border-top:1px solid #e8d098;"
             f"color:#7a5200;font-size:0.82rem'>"
             f"  Final cohort: <strong>n = {n_cohort:,}</strong> &nbsp;·&nbsp; "
