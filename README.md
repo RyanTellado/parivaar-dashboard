@@ -1,6 +1,6 @@
 # Parivaar Probabilistic Clinical Dashboard
 
-A Bayesian clinical decision-support prototype for rural healthcare workers — using probability models to suggest likely diagnoses and recommend treatments based on patient outcomes data.
+A Bayesian clinical decision-support prototype for rural healthcare workers — **using probability models to suggest likely diagnoses and recommend treatments based on patient outcomes data.**
 
 Built on top of a medical informatics platform I developed for Parivaar, a humanitarian nonprofit serving 500,000+ patients across 17+ districts in rural India and South Sudan. The platform digitized patient records that were previously tracked with paper, pencil, and WhatsApp. This dashboard is the next layer: a probabilistic prediction and treatment recommendation engine built on top of that data.
 
